@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import heroImage from "@/assets/hero.jpg";
 import { updateIntake } from "@/lib/intake-store";
+import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -66,12 +67,12 @@ function Home() {
             onSubmit={submit}
             className="mt-8 flex flex-col sm:flex-row gap-2 bg-background/95 p-2 rounded-xl shadow-elev"
           >
-            <input
+            <AddressAutocomplete
               value={address}
-              onChange={(e) => setAddress(e.target.value)}
+              onChange={setAddress}
               placeholder="Enter a commercial property address in Texas"
               className="flex-1 bg-transparent text-foreground placeholder:text-muted-foreground px-4 py-3 outline-none rounded-lg"
-              aria-label="Commercial property address"
+              ariaLabel="Commercial property address"
             />
             <button type="submit" className="btn-accent">
               Start Free AI Property Review
