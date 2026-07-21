@@ -12,6 +12,7 @@ import {
   type IntakeState,
 } from "@/lib/intake-store";
 import { classifyDocument } from "@/lib/document.functions";
+import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 
 export const Route = createFileRoute("/intake")({
   head: () => ({
@@ -152,9 +153,9 @@ function Intake() {
             }}
             className="mt-5 grid gap-2 sm:grid-cols-[1fr_auto]"
           >
-            <input
+            <AddressAutocomplete
               value={address}
-              onChange={(e) => setAddress(e.target.value)}
+              onChange={setAddress}
               placeholder="e.g. 500 Main St, Houston, TX 77002"
               className="rounded-md border border-input bg-background px-4 py-3"
             />
