@@ -1,5 +1,5 @@
 // Session-scoped intake store for the guest flow.
-import type { Extraction, DocumentType } from "./document.functions";
+import { classifyDocument, type Extraction, type DocumentType } from "./document-ai";
 
 export type AuditEntry = {
   ts: number;
@@ -97,11 +97,67 @@ export function effectiveExtraction(s: IntakeState): Extraction | null {
 
 export const LOW_CONFIDENCE_THRESHOLD = 0.6;
 
+const MAX_FILE_BYTES = 15 * 1024 * 1024;
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(new Error("Failed to read file"));
+    r.readAsDataURL(file);
+  });
+}
+
+// Shared by the home page's "Upload Appraisal Notice" button and the /intake upload
+// widget so both go through the exact same validation + classification + audit trail.
+export async function classifyAndStoreDocument(file: File): Promise<Extraction> {
+  if (file.size > MAX_FILE_BYTES) {
+    throw new Error("Document exceeds 15 MB maximum file size.");
+  }
+  if (!/pdf|png|jpe?g/i.test(file.type)) {
+    throw new Error("Supported types: PDF, PNG, JPG.");
+  }
+
+  const dataUrl = await fileToDataUrl(file);
+  appendAudit({ actor: "user", action: "upload_document", to: file.name });
+  const extraction = await classifyDocument({
+    fileName: file.name,
+    mimeType: file.type,
+    dataUrl,
+  });
+  appendAudit({
+    actor: "ai",
+    action: "classify_document",
+    to: `${extraction.documentType} (conf ${(extraction.confidence * 100).toFixed(0)}%)`,
+  });
+
+  const prior = readIntake();
+  const mismatchFlag = detectMismatch(extraction, prior);
+  const lowConfidenceFlag = extraction.confidence < LOW_CONFIDENCE_THRESHOLD;
+  if (lowConfidenceFlag) appendAudit({ actor: "ai", action: "flag_low_confidence" });
+  if (mismatchFlag) appendAudit({ actor: "ai", action: "flag_mismatch" });
+
+  updateIntake({
+    noticeFileName: file.name,
+    extraction,
+    extractionEdited: undefined,
+    extractionConfirmed: false,
+    lowConfidenceFlag,
+    mismatchFlag,
+  });
+
+  return extraction;
+}
+
 export function detectMismatch(e: Extraction, prior?: IntakeState): boolean {
   if (!prior) return false;
   if (prior.cad && e.cadName && !normalize(e.cadName).includes(normalize(prior.cad).split(" ")[0]))
     return true;
-  if (prior.accountNumber && e.accountNumber && normalize(e.accountNumber) !== normalize(prior.accountNumber))
+  if (
+    prior.accountNumber &&
+    e.accountNumber &&
+    normalize(e.accountNumber) !== normalize(prior.accountNumber)
+  )
     return true;
   return false;
 }
@@ -194,54 +250,13 @@ export function routeWorkflows(e: Extraction): WorkflowSuggestion[] {
   return out;
 }
 
-// Deterministic mock CAD lookup for demo purposes.
-export function mockCadLookup(address: string): {
-  matched: boolean;
-  record?: {
-    ownerName: string;
-    propertyAddress: string;
-    cad: string;
-    accountNumber: string;
-    propertyType: string;
-    landValue: number;
-    improvementValue: number;
-    totalValue: number;
-    taxYear: number;
-  };
-} {
-  const a = address.trim().toLowerCase();
-  if (!a || a.length < 8) return { matched: false };
-  const county =
-    /austin|travis/.test(a) ? "Travis Central Appraisal District"
-    : /dallas/.test(a) ? "Dallas Central Appraisal District"
-    : /bexar|san antonio/.test(a) ? "Bexar Appraisal District"
-    : /tarrant|fort worth/.test(a) ? "Tarrant Appraisal District"
-    : /houston|harris/.test(a) ? "Harris Central Appraisal District"
-    : "Harris Central Appraisal District";
-
-  const seed = Array.from(a).reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 7);
-  const landValue = 200_000 + (seed % 400_000);
-  const improvementValue = 800_000 + (seed % 2_600_000);
-  const total = landValue + improvementValue;
-  return {
-    matched: true,
-    record: {
-      ownerName: "SAMPLE HOLDINGS LLC",
-      propertyAddress: address.trim(),
-      cad: county,
-      accountNumber: String(1_000_000 + (seed % 9_000_000)),
-      propertyType: "Commercial - Office/Retail",
-      landValue,
-      improvementValue,
-      totalValue: total,
-      taxYear: 2026,
-    },
-  };
-}
-
 export function currency(n?: number | null) {
   if (n == null) return "—";
-  return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+  return n.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  });
 }
 
 export function displayVal(v: string | number | null | undefined): string {
