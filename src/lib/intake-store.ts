@@ -28,9 +28,12 @@ export type WorkflowSuggestion = {
   primary: boolean;
 };
 
+export type PropertyKind = "commercial" | "residential";
+
 export type IntakeState = {
   // legacy address flow
   address?: string;
+  propertyKind?: PropertyKind;
   cad?: string;
   accountNumber?: string;
   ownerName?: string;

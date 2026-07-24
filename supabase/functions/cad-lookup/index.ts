@@ -2,17 +2,20 @@
 // No secrets required — both ArcGIS FeatureServer endpoints queried below are public,
 // unauthenticated county open-data services.
 //
-// Collin, Montgomery, Denton, Harris, Tarrant, Fort Bend, Williamson, Grayson, and
-// Travis counties are wired up for real (Phase 2A/2B). All nine publish live-queryable
-// parcel data on public ArcGIS FeatureServer/MapServer REST APIs — turns out every one
-// of the originally-assumed "bulk file only" counties (Harris/Tarrant/Williamson/
-// Grayson) actually has a live API too, just not discoverable via plain web search
-// (found via ArcGIS's own item-search API instead). Travis's public source has no
-// owner name or value fields at all (only address + legal description) — included
-// anyway per product decision, with those fields honestly null rather than faked.
-// Only Dallas has no public live API or bulk download found. Addresses outside these
-// nine counties correctly fall through to "not matched" rather than returning
-// fabricated data.
+// Collin, Montgomery, Denton, Harris, Tarrant, Fort Bend, Williamson, Grayson,
+// Travis, and Bexar counties are wired up for real (Phase 2A/2B/2C). All ten publish
+// live-queryable parcel data on public ArcGIS FeatureServer/MapServer REST APIs —
+// turns out every one of the originally-assumed "bulk file only" counties (Harris/
+// Tarrant/Williamson/Grayson) actually has a live API too, just not discoverable via
+// plain web search (found via ArcGIS's own item-search API instead). Travis's public
+// source has no owner name or value fields at all (only address + legal description)
+// — included anyway per product decision, with those fields honestly null rather
+// than faked. Bexar is served directly from BCAD's own domain (maps.bcad.org) —
+// current values, but requires fully-qualified `table.column` names in the query
+// (see queryBexar) and has no land/improvement split, only a combined total. Only
+// Dallas has no public live API or bulk download found. Addresses outside these ten
+// counties correctly fall through to "not matched" rather than returning fabricated
+// data.
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -33,12 +36,17 @@ type CadRecord = {
   taxYear: number | null;
 };
 
+// Several North Texas suburbs straddle the Collin/Denton county line (Frisco,
+// Prosper, Celina, Little Elm, The Colony all have real parcels in both counties),
+// so those city names deliberately appear in BOTH lists below — the caller tries
+// every county whose regex matches and stops at the first one that returns a real
+// record (see the COUNTY_QUERIES loop), rather than assuming one city = one county.
 const COLLIN_CITIES =
-  /\b(plano|mckinney|frisco|allen|wylie|prosper|celina|princeton|anna|melissa|farmersville|collin county)\b/i;
+  /\b(plano|mckinney|frisco|allen|wylie|prosper|celina|princeton|anna|melissa|farmersville|little elm|the colony|collin county)\b/i;
 const MONTGOMERY_CITIES =
   /\b(conroe|the woodlands|magnolia|willis|montgomery|splendora|montgomery county)\b/i;
 const DENTON_CITIES =
-  /\b(denton|lewisville|flower mound|corinth|little elm|the colony|highland village|argyle|aubrey|sanger|pilot point|krum|ponder|denton county)\b/i;
+  /\b(denton|lewisville|flower mound|corinth|little elm|the colony|highland village|argyle|aubrey|sanger|pilot point|krum|ponder|frisco|prosper|celina|denton county)\b/i;
 const HARRIS_CITIES =
   /\b(houston|pasadena|humble|spring|cypress|channelview|tomball|baytown|bellaire|jacinto city|harris county)\b/i;
 const TARRANT_CITIES =
@@ -49,20 +57,36 @@ const WILLIAMSON_CITIES =
   /\b(georgetown|round rock|cedar park|leander|hutto|taylor|liberty hill|coupland|jarrell|thrall|granger|florence|williamson county)\b/i;
 const GRAYSON_CITIES = /\b(sherman|denison|pottsboro|van alstyne|howe|grayson county)\b/i;
 const TRAVIS_CITIES = /\b(austin|pflugerville|del valle|manor|lakeway|bee cave|travis county)\b/i;
+const BEXAR_CITIES =
+  /\b(san antonio|alamo heights|castle hills|converse|elmendorf|helotes|kirby|leon valley|live oak|olmos park|schertz|selma|shavano park|terrell hills|universal city|von ormy|windcrest|bexar county)\b/i;
+
+const STREET_SUFFIX_ALT =
+  "st|street|rd|road|dr|drive|ln|lane|ave|avenue|blvd|boulevard|ct|court|pl|place|plz|plaza|pkwy|parkway|hwy|highway|cir|circle|way|trl|trail|trce|trace|loop|cove|bend|xing|crossing|walk|row";
 
 function parseHouseAndStreet(
   address: string,
 ): { house: string; street: string; cityStateZip: string } | null {
-  const m = address.match(/^\s*(\d+)\s+([^,]+?)\s*,(.*)$/);
-  if (!m) return null;
-  return { house: m[1], street: m[2].trim(), cityStateZip: m[3].trim() };
+  const withComma = address.match(/^\s*(\d+)\s+([^,]+?)\s*,(.*)$/);
+  if (withComma) {
+    return { house: withComma[1], street: withComma[2].trim(), cityStateZip: withComma[3].trim() };
+  }
+
+  // No comma (e.g. "900 Willowwood St Denton") — capture the house number and street
+  // name through the street-suffix word instead, treating everything after it (the
+  // city, and optionally state/zip) as the tail. Without this fallback, any address
+  // typed without a comma failed to parse at all and silently returned "not matched"
+  // before ever reaching the county API.
+  const noComma = address.match(
+    new RegExp(`^\\s*(\\d+)\\s+(.+?\\b(?:${STREET_SUFFIX_ALT})\\.?)\\b\\s*(.*)$`, "i"),
+  );
+  if (!noComma) return null;
+  return { house: noComma[1], street: noComma[2].trim(), cityStateZip: noComma[3].trim() };
 }
 
 // Strips a leading directional (N/S/E/W) and a trailing street-type word, leaving just
 // the "core" street name — used for counties whose schema splits house number and
 // street type into separate fields, so we can't match the full phrase in one LIKE.
-const STREET_SUFFIX_WORDS =
-  /\b(st|street|rd|road|dr|drive|ln|lane|ave|avenue|blvd|boulevard|ct|court|pl|place|pkwy|parkway|hwy|highway|cir|circle|way|trl|trail)\.?$/i;
+const STREET_SUFFIX_WORDS = new RegExp(`\\b(?:${STREET_SUFFIX_ALT})\\.?$`, "i");
 function coreStreetName(street: string): string {
   return street
     .replace(/^(n|s|e|w|north|south|east|west)\s+/i, "")
@@ -73,7 +97,7 @@ function coreStreetName(street: string): string {
 async function queryCollin(address: string): Promise<CadRecord | null> {
   const parsed = parseHouseAndStreet(address);
   if (!parsed) return null;
-  const where = `UPPER(situsConcat) LIKE UPPER('%${parsed.house} ${parsed.street}%')`;
+  const where = `UPPER(situsConcat) LIKE UPPER('%${parsed.house} ${coreStreetName(parsed.street)}%')`;
   const url =
     "https://services2.arcgis.com/uXyoacYrZTPTKD3R/ArcGIS/rest/services/CCAD_Parcel_Feature_Set/FeatureServer/4/query" +
     `?where=${encodeURIComponent(where)}` +
@@ -104,7 +128,7 @@ async function queryCollin(address: string): Promise<CadRecord | null> {
 async function queryMontgomery(address: string): Promise<CadRecord | null> {
   const parsed = parseHouseAndStreet(address);
   if (!parsed) return null;
-  const where = `UPPER(situs) LIKE UPPER('%${parsed.house} ${parsed.street}%')`;
+  const where = `UPPER(situs) LIKE UPPER('%${parsed.house} ${coreStreetName(parsed.street)}%')`;
   const url =
     "https://services1.arcgis.com/PRoAPGnMSUqvTrzq/arcgis/rest/services/Tax_Parcel_view/FeatureServer/0/query" +
     `?where=${encodeURIComponent(where)}` +
@@ -141,11 +165,16 @@ function parseMoneyField(v: string | number | null): number | null {
 async function queryDenton(address: string): Promise<CadRecord | null> {
   const parsed = parseHouseAndStreet(address);
   if (!parsed) return null;
-  const where = `UPPER(Situs_Addr) LIKE UPPER('%${parsed.house} ${parsed.street}%')`;
+  // Denton County's own GIS (gis.dentoncounty.gov) — full ~382k-parcel countywide
+  // dataset, not the earlier "TAD_Parcels" service this used to point at, which
+  // turned out (discovered 2026-07-24, chasing a "not found" report for a real
+  // Denton address) to be a single ~234-parcel subdivision extract, not county-wide
+  // coverage. See texas-cad-data-sources memory for the full story.
+  const where = `UPPER(situs_full_address) LIKE UPPER('%${parsed.house} ${coreStreetName(parsed.street)}%')`;
   const url =
-    "https://services.arcgis.com/oTsZYNubyv7xK5yP/arcgis/rest/services/TAD_Parcels/FeatureServer/0/query" +
+    "https://gis.dentoncounty.gov/arcgis/rest/services/Parcels_FC/MapServer/0/query" +
     `?where=${encodeURIComponent(where)}` +
-    "&outFields=Owner_Name,Situs_Addr,Land_Value,Improvemen,Total_Valu,Appraised_,Account_Nu,Property_C" +
+    "&outFields=name,situs_full_address,landHSValue,landNHSValue,improvementValue,ownerMarketValue,pid,pYear,propType" +
     "&resultRecordCount=1&f=json";
 
   const res = await fetch(url);
@@ -156,17 +185,18 @@ async function queryDenton(address: string): Promise<CadRecord | null> {
   const attrs = json.features?.[0]?.attributes;
   if (!attrs) return null;
 
-  const situsAddr = (attrs.Situs_Addr as string | null)?.trim();
+  const situsAddr = (attrs.situs_full_address as string | null)?.trim();
   return {
-    ownerName: (attrs.Owner_Name as string) ?? null,
-    propertyAddress: situsAddr ? `${situsAddr}, ${parsed.cityStateZip}` : address,
+    ownerName: (attrs.name as string)?.trim() || null,
+    propertyAddress: situsAddr || address,
     cad: "Denton Central Appraisal District",
-    accountNumber: (attrs.Account_Nu as string)?.trim() || null,
-    propertyType: (attrs.Property_C as string)?.trim() || null,
-    landValue: parseMoneyField(attrs.Land_Value),
-    improvementValue: parseMoneyField(attrs.Improvemen),
-    totalValue: parseMoneyField(attrs.Appraised_ ?? attrs.Total_Valu),
-    taxYear: null,
+    accountNumber: attrs.pid != null ? String(attrs.pid) : null,
+    propertyType: (attrs.propType as string)?.trim() || null,
+    landValue:
+      (parseMoneyField(attrs.landHSValue) ?? 0) + (parseMoneyField(attrs.landNHSValue) ?? 0),
+    improvementValue: parseMoneyField(attrs.improvementValue),
+    totalValue: parseMoneyField(attrs.ownerMarketValue),
+    taxYear: attrs.pYear != null ? parseInt(String(attrs.pYear), 10) : null,
   };
 }
 
@@ -210,7 +240,7 @@ async function queryHarris(address: string): Promise<CadRecord | null> {
 async function queryTarrant(address: string): Promise<CadRecord | null> {
   const parsed = parseHouseAndStreet(address);
   if (!parsed) return null;
-  const where = `UPPER(Situs_Addr) LIKE UPPER('%${parsed.house} ${parsed.street}%')`;
+  const where = `UPPER(Situs_Addr) LIKE UPPER('%${parsed.house} ${coreStreetName(parsed.street)}%')`;
   const url =
     "https://tad.newedgeservices.com/arcgis/rest/services/OD_TAD/OD_ParcelView/MapServer/0/query" +
     `?where=${encodeURIComponent(where)}` +
@@ -242,7 +272,7 @@ async function queryTarrant(address: string): Promise<CadRecord | null> {
 async function queryFortBend(address: string): Promise<CadRecord | null> {
   const parsed = parseHouseAndStreet(address);
   if (!parsed) return null;
-  const where = `UPPER(SITUS) LIKE UPPER('%${parsed.house} ${parsed.street}%')`;
+  const where = `UPPER(SITUS) LIKE UPPER('%${parsed.house} ${coreStreetName(parsed.street)}%')`;
   const url =
     "https://services2.arcgis.com/D4saGHECICkCeoJm/arcgis/rest/services/FBCAD_Public_Data/FeatureServer/0/query" +
     `?where=${encodeURIComponent(where)}` +
@@ -273,7 +303,7 @@ async function queryFortBend(address: string): Promise<CadRecord | null> {
 async function queryWilliamson(address: string): Promise<CadRecord | null> {
   const parsed = parseHouseAndStreet(address);
   if (!parsed) return null;
-  const where = `UPPER(SITEADDRESS) LIKE UPPER('%${parsed.house} ${parsed.street}%')`;
+  const where = `UPPER(SITEADDRESS) LIKE UPPER('%${parsed.house} ${coreStreetName(parsed.street)}%')`;
   const url =
     "https://services1.arcgis.com/Xff0bbfp6vwIWmlU/arcgis/rest/services/WCAD_Tax_Parcels/FeatureServer/0/query" +
     `?where=${encodeURIComponent(where)}` +
@@ -382,6 +412,62 @@ async function queryTravis(address: string): Promise<CadRecord | null> {
   };
 }
 
+// BCAD's own domain (maps.bcad.org) DOES work for targeted queries — the earlier
+// "Failed to execute query" error (see comment below) was caused by using bare
+// column names against this service's underlying SQL join, which requires the
+// fully-qualified `table.column` form. Discovered 2026-07-24 chasing a real address
+// (19730 Bulverde Rd) that the third-party mirror below simply didn't have —
+// BCAD's own system has it, with current (2026) values, so it's the primary source
+// now. No land/improvement split is published on this view (only a combined
+// `appraised_val`), so those two fields are honestly null here rather than
+// backfilled from the (stale, incomplete) mirror.
+function parseDollarString(v: string | number | null): number | null {
+  if (v == null) return null;
+  if (typeof v === "number") return v;
+  const n = Number(v.replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(n) ? Math.round(n) : null;
+}
+
+const BCAD_FIELDS = {
+  owner: "PAMaps.dbo.web_map_property.owner_name",
+  situs: "PAMaps.dbo.web_map_property.situs",
+  appraisedVal: "PAMaps.dbo.web_map_property.appraised_val",
+  taxYear: "PAMaps.dbo.web_map_property.prop_val_yr",
+  propType: "PAMaps.dbo.web_map_property.prop_type_desc",
+  propId: "PAMaps.DBO.ParcelFabric_Parcels.PROP_ID",
+};
+
+async function queryBexar(address: string): Promise<CadRecord | null> {
+  const parsed = parseHouseAndStreet(address);
+  if (!parsed) return null;
+  const where = `UPPER(${BCAD_FIELDS.situs}) LIKE UPPER('%${parsed.house} ${coreStreetName(parsed.street)}%')`;
+  const url =
+    "https://maps.bcad.org/arcgis/rest/services/PAMapSearch/MapServer/6/query" +
+    `?where=${encodeURIComponent(where)}` +
+    `&outFields=${Object.values(BCAD_FIELDS).join(",")}` +
+    "&resultRecordCount=1&f=json";
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Bexar CAD query failed: ${res.status}`);
+  const json = (await res.json()) as {
+    features?: Array<{ attributes: Record<string, string | number | null> }>;
+  };
+  const attrs = json.features?.[0]?.attributes;
+  if (!attrs) return null;
+
+  return {
+    ownerName: (attrs[BCAD_FIELDS.owner] as string)?.trim() || null,
+    propertyAddress: (attrs[BCAD_FIELDS.situs] as string)?.trim() || address,
+    cad: "Bexar Appraisal District",
+    accountNumber: attrs[BCAD_FIELDS.propId] != null ? String(attrs[BCAD_FIELDS.propId]) : null,
+    propertyType: (attrs[BCAD_FIELDS.propType] as string)?.trim() || null,
+    landValue: null,
+    improvementValue: null,
+    totalValue: parseDollarString(attrs[BCAD_FIELDS.appraisedVal]),
+    taxYear: attrs[BCAD_FIELDS.taxYear] != null ? Number(attrs[BCAD_FIELDS.taxYear]) : null,
+  };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -394,25 +480,27 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    // Tries every county whose city list matches (not just the first), since a few
+    // city names legitimately span two counties — see the comment above
+    // COLLIN_CITIES. Stops at the first county that actually returns a record.
+    const countyQueries: Array<{ cities: RegExp; query: (address: string) => Promise<CadRecord | null> }> = [
+      { cities: COLLIN_CITIES, query: queryCollin },
+      { cities: MONTGOMERY_CITIES, query: queryMontgomery },
+      { cities: DENTON_CITIES, query: queryDenton },
+      { cities: HARRIS_CITIES, query: queryHarris },
+      { cities: TARRANT_CITIES, query: queryTarrant },
+      { cities: FORT_BEND_CITIES, query: queryFortBend },
+      { cities: WILLIAMSON_CITIES, query: queryWilliamson },
+      { cities: GRAYSON_CITIES, query: queryGrayson },
+      { cities: TRAVIS_CITIES, query: queryTravis },
+      { cities: BEXAR_CITIES, query: queryBexar },
+    ];
+
     let record: CadRecord | null = null;
-    if (COLLIN_CITIES.test(address)) {
-      record = await queryCollin(address);
-    } else if (MONTGOMERY_CITIES.test(address)) {
-      record = await queryMontgomery(address);
-    } else if (DENTON_CITIES.test(address)) {
-      record = await queryDenton(address);
-    } else if (HARRIS_CITIES.test(address)) {
-      record = await queryHarris(address);
-    } else if (TARRANT_CITIES.test(address)) {
-      record = await queryTarrant(address);
-    } else if (FORT_BEND_CITIES.test(address)) {
-      record = await queryFortBend(address);
-    } else if (WILLIAMSON_CITIES.test(address)) {
-      record = await queryWilliamson(address);
-    } else if (GRAYSON_CITIES.test(address)) {
-      record = await queryGrayson(address);
-    } else if (TRAVIS_CITIES.test(address)) {
-      record = await queryTravis(address);
+    for (const { cities, query } of countyQueries) {
+      if (!cities.test(address)) continue;
+      record = await query(address);
+      if (record) break;
     }
 
     if (!record) {

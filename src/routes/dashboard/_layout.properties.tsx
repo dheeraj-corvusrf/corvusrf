@@ -90,7 +90,7 @@ function Properties() {
   return (
     <div>
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <h1 className="font-serif text-2xl font-semibold">My Commercial Properties</h1>
+        <h1 className="font-serif text-2xl font-semibold">My Properties</h1>
         <Link to="/intake" onClick={() => resetIntake()} className="btn-primary btn-primary-hover">
           Add another property
         </Link>

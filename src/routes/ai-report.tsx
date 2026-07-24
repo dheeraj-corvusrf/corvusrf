@@ -19,7 +19,7 @@ export const Route = createFileRoute("/ai-report")({
       { title: "AI Property Review — CorvusRF.ai" },
       { name: "description", content: "AI-generated property tax review with 10 premium modules." },
       { property: "og:title", content: "AI Property Review" },
-      { property: "og:description", content: "AI analysis of your Texas commercial property." },
+      { property: "og:description", content: "AI analysis of your Texas commercial or residential property." },
     ],
   }),
   component: Report,
@@ -160,7 +160,7 @@ function Report() {
       <section className="mt-6 card-elev p-5 flex flex-wrap items-center justify-between gap-3 bg-primary text-primary-foreground">
         <div>
           <p className="text-sm text-primary-foreground/80">
-            {analyzing ? "AI is analyzing your commercial property..." : "AI analysis completed."}
+            {analyzing ? "AI is analyzing your property..." : "AI analysis completed."}
           </p>
           <p className="font-serif text-xl">
             {analyzing
@@ -251,7 +251,7 @@ function Report() {
           </h3>
           <p className="text-muted-foreground mt-2">
             You have viewed your three complimentary AI insight previews. Subscribe to unlock all
-            ten modules and the complete commercial property analysis.
+            ten modules and the complete property analysis.
           </p>
           <div className="mt-6 grid gap-2 sm:grid-cols-2">
             <Link to="/sign-in" className="btn-primary btn-primary-hover">
@@ -368,7 +368,7 @@ function ModulePreviewBody({
         <p className="text-xs text-muted-foreground">
           Based on assessed value {currency(state.totalValue)} —{" "}
           {savings?.rationale ??
-            (loading ? "AI is refining this estimate…" : "typical Texas commercial effective tax rate.")}
+            (loading ? "AI is refining this estimate…" : "typical Texas effective tax rate.")}
         </p>
         {error && <ErrorWithRetry message={error} onRetry={onRetry} />}
       </div>

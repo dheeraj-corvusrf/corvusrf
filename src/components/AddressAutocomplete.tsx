@@ -15,7 +15,7 @@ type Suggestion = {
 };
 
 // Texas bounding box. bounded=1 makes this a hard restriction (not just a ranking
-// preference) since this app only serves Texas commercial properties.
+// preference) since this app only serves Texas properties.
 const TEXAS_VIEWBOX = "-106.7,36.5,-93.5,25.8";
 
 // Nominatim's usage policy caps automated use at 1 request/second and asks that

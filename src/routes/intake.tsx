@@ -8,6 +8,7 @@ import {
   currency,
   UPLOAD_LIMITS,
   type IntakeState,
+  type PropertyKind,
 } from "@/lib/intake-store";
 import { cadLookup } from "@/lib/cad-lookup";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
@@ -21,7 +22,7 @@ export const Route = createFileRoute("/intake")({
       { title: "Property Intake — CorvusRF.ai" },
       {
         name: "description",
-        content: "Validate your Texas commercial property and start your free AI review.",
+        content: "Validate your Texas commercial or residential property and start your free AI review.",
       },
       { property: "og:title", content: "Property Intake" },
       { property: "og:description", content: "Address, notice, and CAD validation." },
@@ -39,6 +40,7 @@ function Intake() {
   const [step, setStep] = useState<Step>("address");
   const [error, setError] = useState<string | null>(null);
   const [address, setAddress] = useState("");
+  const [propertyKind, setPropertyKind] = useState<PropertyKind>("commercial");
   const [noticeName, setNoticeName] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -46,6 +48,7 @@ function Intake() {
   useEffect(() => {
     const s = readIntake();
     setState(s);
+    if (s.propertyKind) setPropertyKind(s.propertyKind);
     if (s.address) {
       setAddress(s.address);
       runValidation(s.address);
@@ -111,15 +114,38 @@ function Intake() {
 
       {step === "address" && (
         <section className="mt-8 card-elev p-6">
-          <h1 className="font-serif text-2xl font-semibold">Enter your commercial property.</h1>
+          <h1 className="font-serif text-2xl font-semibold capitalize">
+            Enter your {propertyKind} property.
+          </h1>
           <p className="mt-1 text-muted-foreground">
             Enter an address, or upload your Texas appraisal notice.
           </p>
+
+          <div className="mt-4 inline-flex rounded-full border border-border bg-secondary/40 p-1">
+            {(["commercial", "residential"] as const).map((kind) => (
+              <button
+                key={kind}
+                type="button"
+                onClick={() => {
+                  setPropertyKind(kind);
+                  updateIntake({ propertyKind: kind });
+                }}
+                className={`rounded-full px-3 py-1 text-xs font-medium capitalize transition-colors ${
+                  propertyKind === kind
+                    ? "bg-accent text-accent-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {kind}
+              </button>
+            ))}
+          </div>
+
           <form
             onSubmit={(e) => {
               e.preventDefault();
               if (!address.trim()) return;
-              updateIntake({ address: address.trim() });
+              updateIntake({ address: address.trim(), propertyKind });
               runValidation(address.trim());
             }}
             className="mt-5 grid gap-2 sm:grid-cols-[1fr_auto]"
@@ -181,11 +207,11 @@ function Intake() {
 
       {step === "notfound" && (
         <section className="mt-8 card-elev p-6">
-          <h2 className="font-serif text-xl font-semibold">
-            We couldn't locate this commercial property.
+          <h2 className="font-serif text-xl font-semibold capitalize">
+            We couldn't locate this {propertyKind} property.
           </h2>
           <p className="mt-1 text-muted-foreground">
-            Please enter a valid commercial property address.
+            Please enter a valid property address, or upload your appraisal notice instead.
           </p>
           <div className="mt-4 flex gap-2">
             <button onClick={() => setStep("address")} className="btn-outline">
