@@ -3,8 +3,12 @@
 @import "tw-animate-css";
 
 @theme inline {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-serif: "Playfair Display", ui-serif, Georgia, serif;
+  /* Single-font system (Figtree) for both body and headings, matching the Ownwell
+     reference — --font-serif is kept as the variable name since h1/h2/h3/.font-serif
+     already reference it throughout the app, but it no longer points to an actual
+     serif typeface. */
+  --font-sans: "Figtree", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Figtree", ui-sans-serif, system-ui, sans-serif;
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -85,7 +89,14 @@
   --hero-field-shade: oklch(0.74 0.13 148);   /* deeper green, for the second wave */
   --hero-tree: oklch(0.42 0.12 145);           /* dark green foliage */
   --hero-sun: oklch(0.85 0.15 90);             /* warm sun yellow */
+  --hero-moon: oklch(0.9 0.02 250);            /* pale moon (only shown in dark mode) */
 }
+
+/* The hero shows a sun in light mode and a moon in dark mode — same spot, swapped
+   via display rather than two separately-positioned elements, so there's no layout
+   shift between themes. */
+.hero-sun-wrap { display: block; }
+.hero-moon-wrap { display: none; }
 
 /* Follows the OS/browser's own light-vs-dark preference — no manual toggle. */
 @media (prefers-color-scheme: dark) {
@@ -116,7 +127,11 @@
     --hero-field-shade: oklch(0.24 0.07 148);
     --hero-tree: oklch(0.32 0.09 145);
     --hero-sun: oklch(0.8 0.16 85);
+    --hero-moon: oklch(0.88 0.02 250);
   }
+
+  .hero-sun-wrap { display: none; }
+  .hero-moon-wrap { display: block; }
 }
 
 @layer base {
@@ -125,7 +140,6 @@
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
     -webkit-font-smoothing: antialiased;
   }
   h1, h2, h3, .font-serif { font-family: var(--font-serif); letter-spacing: -0.01em; }
@@ -141,15 +155,17 @@
 @utility btn-primary {
   display: inline-flex; align-items: center; justify-content: center;
   gap: 0.5rem;
-  background-color: var(--color-primary);
-  color: var(--color-primary-foreground);
+  /* Uses the accent blue rather than --color-primary (navy) so every primary CTA
+     across the site reads as the same blue, not a mix of navy and blue buttons. */
+  background-color: var(--color-accent);
+  color: var(--color-accent-foreground);
   padding: 0.75rem 1.25rem;
   border-radius: 0.6rem;
   font-weight: 600;
   transition: transform .15s ease, background-color .15s ease, box-shadow .15s ease;
   box-shadow: var(--shadow-elev);
 }
-@utility btn-primary-hover { &:hover { background-color: oklch(0.34 0.09 255); } }
+@utility btn-primary-hover { &:hover { background-color: oklch(0.54 0.19 255); } }
 
 @utility btn-accent {
   display: inline-flex; align-items: center; justify-content: center;
