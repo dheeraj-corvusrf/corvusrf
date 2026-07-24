@@ -2,7 +2,12 @@ import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Upload, Wallet, Send, Sparkles } from "lucide-react";
-import { updateIntake, resetIntake, classifyAndStoreDocument } from "@/lib/intake-store";
+import {
+  updateIntake,
+  resetIntake,
+  classifyAndStoreDocument,
+  type PropertyKind,
+} from "@/lib/intake-store";
 import { askRouter } from "@/lib/ask-router";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import { SampleNoticeDialog } from "@/components/SampleNoticeDialog";
@@ -16,7 +21,7 @@ export const Route = createFileRoute("/")({
       {
         name: "description",
         content:
-          "Upload your Texas appraisal notice or enter your commercial property. AI checks your county value, protest deadline, evidence gaps, and savings opportunity.",
+          "Upload your Texas appraisal notice or enter your commercial or residential property. AI checks your county value, protest deadline, evidence gaps, and savings opportunity.",
       },
       { property: "og:title", content: "CorvusRF.ai — Texas Property Tax, Powered by AI" },
       {
@@ -41,6 +46,7 @@ const PROMPT_CHIPS = [
 function Home() {
   const navigate = useNavigate();
   const [address, setAddress] = useState("");
+  const [propertyKind, setPropertyKind] = useState<PropertyKind>("commercial");
   const [uploading, setUploading] = useState(false);
   const [askQuery, setAskQuery] = useState("");
   const [asking, setAsking] = useState(false);
@@ -50,7 +56,7 @@ function Home() {
     e.preventDefault();
     if (!address.trim()) return;
     resetIntake();
-    updateIntake({ address: address.trim() });
+    updateIntake({ address: address.trim(), propertyKind });
     navigate({ to: "/intake" });
   };
 
@@ -104,16 +110,37 @@ function Home() {
           overvaluation. Track your savings — all in one place.
         </p>
 
+        <div className="mt-8 flex justify-center" role="radiogroup" aria-label="Property type">
+          <div className="inline-flex rounded-full border border-border bg-card p-1 shadow-sm">
+            {(["commercial", "residential"] as const).map((kind) => (
+              <button
+                key={kind}
+                type="button"
+                role="radio"
+                aria-checked={propertyKind === kind}
+                onClick={() => setPropertyKind(kind)}
+                className={`rounded-full px-4 py-1.5 text-sm font-medium capitalize transition-colors ${
+                  propertyKind === kind
+                    ? "bg-accent text-accent-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {kind}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <form
           onSubmit={submit}
-          className="mt-8 flex flex-col sm:flex-row sm:items-center gap-2 bg-card p-2 rounded-xl shadow-elev border border-border"
+          className="mt-3 flex flex-col sm:flex-row sm:items-center gap-2 bg-card p-2 rounded-xl shadow-elev border border-border"
         >
           <AddressAutocomplete
             value={address}
             onChange={setAddress}
-            placeholder="Enter a commercial property address in Texas"
+            placeholder={`Enter a ${propertyKind} property address in Texas`}
             className="flex-1 bg-transparent text-foreground placeholder:text-muted-foreground px-4 py-3 outline-none rounded-lg"
-            ariaLabel="Commercial property address"
+            ariaLabel={`${propertyKind === "commercial" ? "Commercial" : "Residential"} property address`}
           />
           <MicButton onResult={setAddress} />
           <button type="submit" className="btn-accent">

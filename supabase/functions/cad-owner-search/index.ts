@@ -1,6 +1,6 @@
 // Deploy via CLI: `supabase functions deploy cad-owner-search`.
 // No secrets required — same public ArcGIS FeatureServer endpoints as cad-lookup,
-// just queried by owner name instead of address, across all nine counties at once.
+// just queried by owner name instead of address, across all ten counties at once.
 //
 // Used right after signup to find properties an LLC/business name may already own,
 // so the user doesn't have to manually enter every address. Real matches only — a
@@ -85,23 +85,26 @@ async function searchMontgomery(owner: string): Promise<CadRecord[]> {
 }
 
 async function searchDenton(owner: string): Promise<CadRecord[]> {
-  const where = `UPPER(Owner_Name) LIKE UPPER('%${owner}%')`;
+  // Denton County's own GIS (gis.dentoncounty.gov) — see cad-lookup/index.ts for why
+  // this replaced the earlier "TAD_Parcels" service (a ~234-parcel subdivision
+  // extract, not countywide coverage).
+  const where = `UPPER(name) LIKE UPPER('%${owner}%')`;
   const url =
-    "https://services.arcgis.com/oTsZYNubyv7xK5yP/arcgis/rest/services/TAD_Parcels/FeatureServer/0/query" +
+    "https://gis.dentoncounty.gov/arcgis/rest/services/Parcels_FC/MapServer/0/query" +
     `?where=${encodeURIComponent(where)}` +
-    "&outFields=Owner_Name,Situs_Addr,Land_Value,Improvemen,Total_Valu,Appraised_,Account_Nu,Property_C" +
+    "&outFields=name,situs_full_address,landHSValue,landNHSValue,improvementValue,ownerMarketValue,pid,pYear,propType" +
     `&resultRecordCount=${PER_COUNTY_LIMIT}&f=json`;
   const features = await fetchFeatures(url);
   return features.map(({ attributes: a }) => ({
-    ownerName: (a.Owner_Name as string) ?? null,
-    propertyAddress: (a.Situs_Addr as string)?.trim() ?? "",
+    ownerName: (a.name as string)?.trim() || null,
+    propertyAddress: (a.situs_full_address as string)?.trim() ?? "",
     cad: "Denton Central Appraisal District",
-    accountNumber: (a.Account_Nu as string)?.trim() || null,
-    propertyType: (a.Property_C as string)?.trim() || null,
-    landValue: parseMoneyField(a.Land_Value),
-    improvementValue: parseMoneyField(a.Improvemen),
-    totalValue: parseMoneyField(a.Appraised_ ?? a.Total_Valu),
-    taxYear: null,
+    accountNumber: a.pid != null ? String(a.pid) : null,
+    propertyType: (a.propType as string)?.trim() || null,
+    landValue: (parseMoneyField(a.landHSValue) ?? 0) + (parseMoneyField(a.landNHSValue) ?? 0),
+    improvementValue: parseMoneyField(a.improvementValue),
+    totalValue: parseMoneyField(a.ownerMarketValue),
+    taxYear: a.pYear != null ? parseInt(String(a.pYear), 10) : null,
   }));
 }
 
@@ -219,6 +222,46 @@ async function searchGrayson(owner: string): Promise<CadRecord[]> {
 // Travis's public source has no owner name field at all — cannot be searched by
 // owner, so it's correctly omitted here (same honesty constraint as cad-lookup.ts).
 
+// BCAD's own domain — see cad-lookup/index.ts's queryBexar for why this needs
+// fully-qualified `table.column` names (this service is a SQL join underneath) and
+// why there's no land/improvement split, only a combined appraised value.
+function parseDollarString(v: string | number | null): number | null {
+  if (v == null) return null;
+  if (typeof v === "number") return v;
+  const n = Number(v.replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(n) ? Math.round(n) : null;
+}
+
+const BCAD_FIELDS = {
+  owner: "PAMaps.dbo.web_map_property.owner_name",
+  situs: "PAMaps.dbo.web_map_property.situs",
+  appraisedVal: "PAMaps.dbo.web_map_property.appraised_val",
+  taxYear: "PAMaps.dbo.web_map_property.prop_val_yr",
+  propType: "PAMaps.dbo.web_map_property.prop_type_desc",
+  propId: "PAMaps.DBO.ParcelFabric_Parcels.PROP_ID",
+};
+
+async function searchBexar(owner: string): Promise<CadRecord[]> {
+  const where = `UPPER(${BCAD_FIELDS.owner}) LIKE UPPER('%${owner}%')`;
+  const url =
+    "https://maps.bcad.org/arcgis/rest/services/PAMapSearch/MapServer/6/query" +
+    `?where=${encodeURIComponent(where)}` +
+    `&outFields=${Object.values(BCAD_FIELDS).join(",")}` +
+    `&resultRecordCount=${PER_COUNTY_LIMIT}&f=json`;
+  const features = await fetchFeatures(url);
+  return features.map(({ attributes: a }) => ({
+    ownerName: (a[BCAD_FIELDS.owner] as string)?.trim() || null,
+    propertyAddress: (a[BCAD_FIELDS.situs] as string)?.trim() || "",
+    cad: "Bexar Appraisal District",
+    accountNumber: a[BCAD_FIELDS.propId] != null ? String(a[BCAD_FIELDS.propId]) : null,
+    propertyType: (a[BCAD_FIELDS.propType] as string)?.trim() || null,
+    landValue: null,
+    improvementValue: null,
+    totalValue: parseDollarString(a[BCAD_FIELDS.appraisedVal]),
+    taxYear: a[BCAD_FIELDS.taxYear] != null ? Number(a[BCAD_FIELDS.taxYear]) : null,
+  }));
+}
+
 const SEARCHERS = [
   searchCollin,
   searchMontgomery,
@@ -228,6 +271,7 @@ const SEARCHERS = [
   searchFortBend,
   searchWilliamson,
   searchGrayson,
+  searchBexar,
 ];
 
 Deno.serve(async (req: Request) => {
