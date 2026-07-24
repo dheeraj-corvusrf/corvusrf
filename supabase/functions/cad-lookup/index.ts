@@ -36,29 +36,21 @@ type CadRecord = {
   taxYear: number | null;
 };
 
-// Several North Texas suburbs straddle the Collin/Denton county line (Frisco,
-// Prosper, Celina, Little Elm, The Colony all have real parcels in both counties),
-// so those city names deliberately appear in BOTH lists below — the caller tries
-// every county whose regex matches and stops at the first one that returns a real
-// record (see the COUNTY_QUERIES loop), rather than assuming one city = one county.
-const COLLIN_CITIES =
-  /\b(plano|mckinney|frisco|allen|wylie|prosper|celina|princeton|anna|melissa|farmersville|little elm|the colony|collin county)\b/i;
-const MONTGOMERY_CITIES =
-  /\b(conroe|the woodlands|magnolia|willis|montgomery|splendora|montgomery county)\b/i;
-const DENTON_CITIES =
-  /\b(denton|lewisville|flower mound|corinth|little elm|the colony|highland village|argyle|aubrey|sanger|pilot point|krum|ponder|frisco|prosper|celina|denton county)\b/i;
-const HARRIS_CITIES =
-  /\b(houston|pasadena|humble|spring|cypress|channelview|tomball|baytown|bellaire|jacinto city|harris county)\b/i;
-const TARRANT_CITIES =
-  /\b(fort worth|arlington|hurst|euless|bedford|mansfield|north richland hills|keller|southlake|tarrant county)\b/i;
-const FORT_BEND_CITIES =
-  /\b(sugar land|missouri city|richmond|rosenberg|stafford|fulshear|needville|fort bend county)\b/i;
-const WILLIAMSON_CITIES =
-  /\b(georgetown|round rock|cedar park|leander|hutto|taylor|liberty hill|coupland|jarrell|thrall|granger|florence|williamson county)\b/i;
-const GRAYSON_CITIES = /\b(sherman|denison|pottsboro|van alstyne|howe|grayson county)\b/i;
-const TRAVIS_CITIES = /\b(austin|pflugerville|del valle|manor|lakeway|bee cave|travis county)\b/i;
-const BEXAR_CITIES =
-  /\b(san antonio|alamo heights|castle hills|converse|elmendorf|helotes|kirby|leon valley|live oak|olmos park|schertz|selma|shavano park|terrell hills|universal city|von ormy|windcrest|bexar county)\b/i;
+// Every county below used to be gated behind a city-name regex (e.g. only try
+// Collin if the address said "Plano" or "McKinney"), on the theory that a city name
+// reliably indicates a county. It doesn't: three separate real-address bug reports
+// on 2026-07-24 each turned out to be this same assumption failing a different way
+// — Frisco/Prosper/Celina/Little Elm/The Colony are real parcels in *either*
+// Collin or Denton depending on the specific address, and USPS assigns "Dallas" as
+// the mailing city for large swaths of ZIP codes that are legally in Collin or
+// Denton County, not Dallas County. Enumerating every small town and unincorporated
+// area in ten counties (plus every USPS mailing-city quirk) is an unbounded,
+// unwinnable list. So this now just queries every supported county in parallel for
+// every address and takes the first one that returns a real record, in the fixed
+// priority order below — no city-name filtering at all. The per-county ArcGIS/GIS
+// queries are cheap, public, and independent, so this costs a few concurrent HTTP
+// calls (bounded by the slowest single county, not the sum) rather than any real
+// correctness risk, and permanently closes off this entire class of bug.
 
 const STREET_SUFFIX_ALT =
   "st|street|rd|road|dr|drive|ln|lane|ave|avenue|blvd|boulevard|ct|court|pl|place|plz|plaza|pkwy|parkway|hwy|highway|cir|circle|way|trl|trail|trce|trace|loop|cove|bend|xing|crossing|walk|row";
@@ -480,27 +472,30 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Tries every county whose city list matches (not just the first), since a few
-    // city names legitimately span two counties — see the comment above
-    // COLLIN_CITIES. Stops at the first county that actually returns a record.
-    const countyQueries: Array<{ cities: RegExp; query: (address: string) => Promise<CadRecord | null> }> = [
-      { cities: COLLIN_CITIES, query: queryCollin },
-      { cities: MONTGOMERY_CITIES, query: queryMontgomery },
-      { cities: DENTON_CITIES, query: queryDenton },
-      { cities: HARRIS_CITIES, query: queryHarris },
-      { cities: TARRANT_CITIES, query: queryTarrant },
-      { cities: FORT_BEND_CITIES, query: queryFortBend },
-      { cities: WILLIAMSON_CITIES, query: queryWilliamson },
-      { cities: GRAYSON_CITIES, query: queryGrayson },
-      { cities: TRAVIS_CITIES, query: queryTravis },
-      { cities: BEXAR_CITIES, query: queryBexar },
+    // Queries every supported county concurrently (see the comment above) and takes
+    // the first real match in this fixed priority order — no city-name filtering.
+    // A single county's transient failure (network error, endpoint down) no longer
+    // fails the whole lookup; it's just skipped, same as a plain no-match.
+    const countyQueriesInOrder = [
+      queryCollin,
+      queryMontgomery,
+      queryDenton,
+      queryHarris,
+      queryTarrant,
+      queryFortBend,
+      queryWilliamson,
+      queryGrayson,
+      queryTravis,
+      queryBexar,
     ];
 
+    const results = await Promise.allSettled(countyQueriesInOrder.map((query) => query(address)));
     let record: CadRecord | null = null;
-    for (const { cities, query } of countyQueries) {
-      if (!cities.test(address)) continue;
-      record = await query(address);
-      if (record) break;
+    for (const result of results) {
+      if (result.status === "fulfilled" && result.value) {
+        record = result.value;
+        break;
+      }
     }
 
     if (!record) {
